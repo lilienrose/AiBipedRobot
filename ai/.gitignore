@@ -1,0 +1,14 @@
+# Python virtual environments & cache
+venv/
+host_ai/venv/
+__pycache__/
+*.pyc
+
+# Heavy ML models (pokud stahuješ z Tasks API)
+*.task
+
+# PlatformIO & IDE configs
+firmware/.pio/
+firmware/.vscode/
+.vscode/
+.idea/
