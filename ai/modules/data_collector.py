@@ -31,10 +31,9 @@ class DatasetWriter:
         self._ensure_header()
 
     def _ensure_header(self) -> None:
-        """Zapíše hlavičku CSV (label + 63 souřadnic), pokud soubor ještě neexistuje."""
+        """Zapíše hlavičku CSV, pokud soubor ještě neexistuje."""
         if not os.path.exists(self.filepath):
             header = ["label"]
-            # Vygeneruje názvy sloupců: x0, y0, z0, x1, y1, z1 ... x20, y20, z20
             for i in range(21):
                 header.extend([f"x{i}", f"y{i}", f"z{i}"])
 
@@ -157,7 +156,7 @@ def run_collector():
     while True:
         success, frame = cap.read()
         if not success:
-            print("[CHYBA] Kamera nenaběhla.")
+            print("Chyba: Kamera nenaběhla.")
             break
 
         frame = cv2.flip(frame, 1)

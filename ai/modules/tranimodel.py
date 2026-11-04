@@ -32,7 +32,7 @@ def load_dataset(filepath: str) -> tuple[np.ndarray, np.ndarray]:
     x = data[:, 1:]
 
     print (
-        f"Dataset načten úspěšně: {X.shape[0]} vzorků, {X.shape[1]} příznaků."
+        f"Dataset načten úspěšně: {x.shape[0]} vzorků, {x.shape[1]} příznaků."
     )
     return x,y
 
@@ -53,4 +53,19 @@ def train_and_evaluate(x: np.ndarray, y: np.ndarray):
     print(f"Přenost modelu je: {accuracy * 100:.2f} %")
     return model 
 
-        
+def save_model(model: RandomForestClassifier, filepath: str) -> None:
+    directory = os.path.dirname(filepath)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+    joblib.dump(model, filepath)
+    print(f"Model je úspěšně uložen do: {filepath}")
+
+def main():
+    print("=== TRÉNINK ML MODELU PRO REPOZITÁŘ ROBOTA ===")
+    X, y = load_dataset(DATASET_PATH)
+    model = train_and_evaluate(X, y)
+    save_model(model, MODEL_PATH)
+
+if __name__ == "__main__":
+    main()
