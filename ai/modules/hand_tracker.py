@@ -30,7 +30,7 @@ class HandTracker:
 #inicializuje detektor MediaPipe Hand Landmarker s konfigurací
     def __init__(
         self,
-        max_hands: int = 1,
+        max_hands: int = 2,
         detection_conf: float = 0.7,
         track_conf: float = 0.7,
     ):
@@ -49,37 +49,56 @@ class HandTracker:
      
  #Příjme snímek z OpenCV, převede jej do formutu pro mp
  #Spustí detekci ruky
-    def process_frame(self, frame: np.ndarray) -> bool:
-    
+    def process_frame(self, frame: np.ndarray) -> int:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data = frame_rgb)
-
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
         self.results = self.detector.detect(mp_image)
 
-        return bool(self.results and self.results.hand_landmarks)
+        if not self.results or not self.results.hand_landmarks:
+            return 0
+        return len(self.results.hand_landmarks)
 
 
 # Převádí souřadnice 21 kloubů detekované ruky
 #na normalizovaný 63-prvkový vektor(21 x 3)
 #který není závislý na poloze ruky v obraze
 #nebo její vzdálenosti od kamery
-    def get_normalized_vector(self) -> np.ndarray | None:
-        if not self.results or not self.results.hand_landmarks:
+    def get_normalized_vector(self, hand_index: int = 0) -> np.ndarray | None:
+        if (
+            not self.results
+            or not self.results.hand_landmarks
+            or len(self.results.hand_landmarks) <= hand_index
+        ):
             return None
 
-        detected_hand = self.results.hand_landmarks[0]
-        coords = np.array([[lm.x, lm.y, lm.z]for lm in detected_hand])
+        detected_hand = self.results.hand_landmarks[hand_index]
+        coords = np.array([[lm.x, lm.y, lm.z] for lm in detected_hand])
 
         wrist = coords[0]
-
         translated = coords - wrist
 
         palm_size = np.linalg.norm(translated[9])
         if palm_size < 1e-6:
             palm_size = 1.0
 
-        return ( translated / palm_size).flatten()
-                               
+        normalized = translated / palm_size
+
+        # Pokud je v záběru levá ruka, zrcadlíme osu X, aby odpovídala pravé ruce z datasetu
+        hand_label, _ = self.get_hand_info(hand_index)
+        if hand_label == "Left":
+            normalized[:, 0] *= -1.0
+
+        return normalized.flatten()
+    def get_hand_info(self, hand_index: int = 0) -> tuple[str | None, float]:
+        if (
+            not self.results
+            or not self.results.handedness
+            or len(self.results.handedness) <= hand_index
+        ):
+            return None, 0.0
+
+        classification = self.results.handedness[hand_index][0]
+        return classification.category_name, float(classification.score)                      
                                
 #Vykresluje vizuální kostru ruky, kloubky
 #volitelně jejich ID indexy přímo do snímku videa
@@ -90,7 +109,7 @@ class HandTracker:
             return frame
 
         h, w, _ = frame.shape
-        for hand in self.results.hand_landmarks:
+        for idx, hand in enumerate(self.results.hand_landmarks):
             pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand]
 
      
@@ -112,6 +131,17 @@ class HandTracker:
                     0.4,
                     (255, 255, 0),
                     1,
+                )
+                hand_label, hand_score = self.get_hand_info(idx)
+                if hand_label:
+                    cv2.putText(
+                    frame,
+                    f"{hand_label} ({hand_score * 100:.0f}%)",
+                    (pts[0][0] - 20, pts[0][1] + 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (255, 255, 0),
+                    2,
                 )
 
         return frame
