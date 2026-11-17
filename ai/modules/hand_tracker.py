@@ -145,6 +145,41 @@ class HandTracker:
                 )
 
         return frame
+
+    def get_spatial_telemetry(
+        self,
+        hand_index: int = 0,
+        palm_min: float = 0.08,
+        palm_max: float = 0.28,
+        deadzone: float = 0.12,
+    ) -> tuple[float, float]:
+        if (
+            not self.results
+            or not self.results.hand_landmarks
+            or len(self.results.hand_landmarks) <= hand_index
+        ):
+            return 0.0, 0.0
+
+        hand = self.results.hand_landmarks[hand_index]
+        wrist = hand[0]
+        middle_mcp = hand[9]
+
+        dx = middle_mcp.x - wrist.x
+        dy = middle_mcp.y - wrist.y
+        palm_2d_size = float(np.hypot(dx, dy))
+
+        norm_speed = (palm_2d_size - palm_min) / max(palm_max - palm_min, 1e-6)
+        speed = float(np.clip(0.2 + 0.8 * norm_speed, 0.2, 1.0))
+
+        raw_turn = (wrist.x - 0.5) * 2.0
+        if abs(raw_turn) < deadzone:
+            turn = 0.0
+        else:
+            sign = 1.0 if raw_turn > 0 else -1.0
+            turn = sign * (abs(raw_turn) - deadzone) / (1.0 - deadzone)
+            turn = float(np.clip(turn, -1.0, 1.0))
+
+        return round(speed, 2), round(turn, 2)
     
 #Hlavní testovací smyčka pro spuštění hand_tracker.py modulu
 def capture_cam():
