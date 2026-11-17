@@ -14,8 +14,10 @@ from config import (
     PALM_SIZE_MIN,
     ROBOT_IP,
     ROBOT_PORT,
+    TELEMETRY_PORT,
     TURN_DEADZONE,
 )
+from telemetry_reciever import TelemetryReceiver
 from gesture_classifier import GestureClassifier
 from hand_tracker import HandTracker
 from robot_sender import RobotSender
@@ -31,6 +33,7 @@ def run_robot_control():
         min_votes=CONSENSUS_MIN_VOTES,
     )
     sender = RobotSender(ip=ROBOT_IP, port=ROBOT_PORT)
+    telemetry = TelemetryReceiver(port=TELEMETRY_PORT)
     arming = ArmingManager(
         arm_gesture=ARM_GESTURE,
         hold_seconds=ARM_HOLD_SECONDS,
@@ -40,31 +43,39 @@ def run_robot_control():
     progress = 0.0
 
     window_name = "Robot Gesture Control Center"
-    print(f"Info: Řídicí centrum spuštěno. Robot: {ROBOT_IP}:{ROBOT_PORT}")
+    print(f"Info: Ridici centrum spusteno. Robot: {ROBOT_IP}:{ROBOT_PORT} | Telemetrie UDP: {TELEMETRY_PORT}")
 
     while True:
         success, frame = cap.read()
         if not success or frame is None or frame.size == 0:
-            print("[CHYBA] Kamera nenaběhla nebo vrátila prázdný snímek.")
+            print("[CHYBA] Kamera nenabehla nebo vratila prazdny snimek.")
             break
 
         frame = cv2.flip(frame, 1)
         num_hands = tracker.process_frame(frame)
+        telem = telemetry.get_state()
 
         if num_hands > 0:
             frame = tracker.draw_landmarks(frame)
 
-        # STAV 1: Více rukou -> okamžitý STOP a bezpečnostní uzamčení
-        if num_hands > 1:
+        if telem["robot_fallen"]:
             active_hand = None
             classifier.reset()
             arming.force_disarm()
             progress = 0.0
             sender.send_command("STOP")
-            text = f"STOP: Více rukou ({num_hands}) -> ZAMČENO!"
+            text = f"ALARM: Pad robota (P:{telem['pitch']:.0f}, R:{telem['roll']:.0f}) -> STOP!"
             color = (0, 0, 255)
 
-        # STAV 2: Jedna ruka v záběru
+        elif num_hands > 1:
+            active_hand = None
+            classifier.reset()
+            arming.force_disarm()
+            progress = 0.0
+            sender.send_command("STOP")
+            text = f"STOP: Vic rukou ({num_hands}) -> ZAMCENO!"
+            color = (0, 0, 255)
+
         elif num_hands == 1:
             hand_label, hand_conf = tracker.get_hand_info(0)
 
@@ -73,12 +84,12 @@ def run_robot_control():
                 classifier.reset()
                 is_armed, progress = arming.update(None, hand_present=False)
                 sender.send_command("STOP")
-                text = f"STOP: Nepovolená ruka ({hand_label})"
+                text = f"STOP: Nepovolena ruka ({hand_label})"
                 color = (0, 140, 255)
 
             elif hand_conf < MIN_HAND_CONFIDENCE:
                 is_armed, progress = arming.update(None, hand_present=True)
-                text = f"Nejistá detekce ruky ({hand_conf * 100:.0f}%)..."
+                text = f"Nejista detekce ruky ({hand_conf * 100:.0f}%)..."
                 color = (0, 200, 255)
 
             else:
@@ -94,25 +105,30 @@ def run_robot_control():
 
                 valid_gesture = gesture_name if status == "OK" else None
                 is_armed, progress = arming.update(valid_gesture, hand_present=True)
-
                 hand_cz = "PRAVA" if hand_label == "Right" else "LEVA"
 
                 if not is_armed:
                     sender.send_command("STOP")
-                    text = f"[{hand_cz}] ZAMCENO | Gesto: {gesture_name} ({confidence * 100:.0f}%)"
-                    color = (0, 140, 255)
-                else:
-                    if gesture_name == ARM_GESTURE:
-                        sender.send_command("STOP")
-                        text = f"[{hand_cz}] Zamykam..."
-                        color = (0, 200, 255)
+                    if status == "UNKNOWN_OOD":
+                        text = f"[{hand_cz}] ZAMCENO | Neznamy tvar ruky (OOD)"
                     else:
-                        sender.send_command(gesture_name, hand=hand_label, speed=speed, turn=turn)
-                        text = (
-                            f"[{hand_cz}] {gesture_name} ({confidence * 100:.0f}%) | "
-                            f"Rychlost: {int(speed * 100)}% | Smer: {turn:+.2f}"
-                        )
-                        color = (0, 255, 0)
+                        text = f"[{hand_cz}] ZAMCENO | Gesto: {gesture_name} ({confidence * 100:.0f}%)"
+                    color = (0, 140, 255)
+                elif gesture_name == ARM_GESTURE:
+                    sender.send_command("STOP")
+                    text = f"[{hand_cz}] Zamykam..."
+                    color = (0, 200, 255)
+                elif telem["obstacle_blocked"] and gesture_name in FORWARD_GESTURES:
+                    sender.send_command("STOP")
+                    text = f"SAFETY OVERRIDE: Prekazka {telem['dist_cm']:.0f} cm (Blokovano {gesture_name})"
+                    color = (0, 0, 255)
+                else:
+                    sender.send_command(gesture_name, hand=hand_label, speed=speed, turn=turn)
+                    text = (
+                        f"[{hand_cz}] {gesture_name} ({confidence * 100:.0f}%) | "
+                        f"Rychlost: {int(speed * 100)}% | Smer: {turn:+.2f}"
+                    )
+                    color = (0, 255, 0)
 
         else:
             active_hand = None
@@ -123,20 +139,15 @@ def run_robot_control():
             color = (0, 0, 255)
 
         overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 8), (620, 78), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (10, 8), (640, 78), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
 
         cv2.putText(
-            frame,
-            text,
-            (20, 65),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            color,
-            2,
-            cv2.LINE_AA,
+            frame, text, (20, 65),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.58, color, 2, cv2.LINE_AA,
         )
         arming.draw_hud(frame, progress)
+        telemetry.draw_cockpit_hud(frame)
 
         cv2.imshow(window_name, frame)
 
@@ -150,6 +161,7 @@ def run_robot_control():
         except cv2.error:
             break
 
+    telemetry.close()
     sender.close()
     cap.release()
     cv2.destroyAllWindows()

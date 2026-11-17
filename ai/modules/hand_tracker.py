@@ -5,6 +5,7 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from feature_extractor import extract_features_from_coords
 
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 if "DISPLAY" not in os.environ:
@@ -38,13 +39,16 @@ class HandTracker:
         base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
-            running_mode=vision.RunningMode.IMAGE,
+            running_mode=vision.RunningMode.VIDEO,
             num_hands=self.max_hands,
             min_hand_detection_confidence=detection_conf,
             min_tracking_confidence=track_conf,
         )
         self.detector = vision.HandLandmarker.create_from_options(options)
         self.results = None
+        self._last_timestamp_ms = 0
+        self.smooth_speed = 0.0
+        self.smooth_turn = 0.0
 
      
  #Příjme snímek z OpenCV, převede jej do formutu pro mp
@@ -52,7 +56,13 @@ class HandTracker:
     def process_frame(self, frame: np.ndarray) -> int:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-        self.results = self.detector.detect(mp_image)
+
+        now_ms = int(time.monotonic() * 1000)
+        if now_ms <= self._last_timestamp_ms:
+            now_ms = self._last_timestamp_ms + 1
+        self._last_timestamp_ms = now_ms
+
+        self.results = self.detector.detect_for_video(mp_image, now_ms)
 
         if not self.results or not self.results.hand_landmarks:
             return 0
@@ -72,21 +82,13 @@ class HandTracker:
             return None
 
         detected_hand = self.results.hand_landmarks[hand_index]
-        coords = np.array([[lm.x, lm.y, lm.z] for lm in detected_hand])
+        coords = np.array([[lm.x, lm.y, lm.z] for lm in detected_hand], dtype=np.float32)
 
-        wrist = coords[0]
-        translated = coords - wrist
-
-        palm_size = np.linalg.norm(translated[9])
-        if palm_size < 1e-6:
-            palm_size = 1.0
-
-        normalized = translated / palm_size
-
-        # Pokud je v záběru levá ruka, zrcadlíme osu X, aby odpovídala pravé ruce z datasetu
         hand_label, _ = self.get_hand_info(hand_index)
         if hand_label == "Left":
-            normalized[:, 0] *= -1.0
+            coords[:, 0] *= -1.0
+
+        return extract_features_from_coords(coords)
 
         return normalized.flatten()
     def get_hand_info(self, hand_index: int = 0) -> tuple[str | None, float]:
@@ -164,10 +166,7 @@ class HandTracker:
         wrist = hand[0]
         middle_mcp = hand[9]
 
-        dx = middle_mcp.x - wrist.x
-        dy = middle_mcp.y - wrist.y
-        palm_2d_size = float(np.hypot(dx, dy))
-
+        palm_2d_size = float(np.hypot(middle_mcp.x - wrist.x, middle_mcp.y - wrist.y))
         norm_speed = (palm_2d_size - palm_min) / max(palm_max - palm_min, 1e-6)
         speed = float(np.clip(0.2 + 0.8 * norm_speed, 0.2, 1.0))
 
@@ -176,10 +175,13 @@ class HandTracker:
             turn = 0.0
         else:
             sign = 1.0 if raw_turn > 0 else -1.0
-            turn = sign * (abs(raw_turn) - deadzone) / (1.0 - deadzone)
-            turn = float(np.clip(turn, -1.0, 1.0))
+            turn = float(np.clip(sign * (abs(raw_turn) - deadzone) / (1.0 - deadzone), -1.0, 1.0))
 
-        return round(speed, 2), round(turn, 2)
+        alpha = 0.35
+        self.smooth_speed = alpha * speed + (1.0 - alpha) * self.smooth_speed
+        self.smooth_turn = alpha * turn + (1.0 - alpha) * self.smooth_turn
+
+        return round(self.smooth_speed, 2), round(self.smooth_turn, 2)
     
 #Hlavní testovací smyčka pro spuštění hand_tracker.py modulu
 def capture_cam():

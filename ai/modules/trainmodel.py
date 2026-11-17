@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
-
+from feature_extractor import expand_dataset_features
 
 from config import DATASET_PATH, GESTURE_MAP, MODEL_PATH
 
@@ -76,18 +76,38 @@ def augment_with_rotations(
 #Použije Random Forestse 100 rozhodovacími stromy
 #Otestuje vytrénovaný model na 20% testovacích dat
 #Vypočítá přenost a zobrazí detailní přehled pro každé gesto
-def train_and_evaluate(x: np.ndarray, y: np.ndarray):
-    x_train, x_test, y_train, y_test = train_test_split(
-        x, y, test_size=0.2, random_state=42, stratify=y
+def train_and_evaluate(x_raw: np.ndarray, y: np.ndarray):
+    x_train_raw, x_test_raw, y_train, y_test = train_test_split(
+        x_raw, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    x_train_aug, y_train_aug = augment_with_rotations(x_train, y_train)
+    x_train_aug, y_train_aug = augment_with_rotations(x_train_raw, y_train)
+
+    x_train_feat = expand_dataset_features(x_train_aug)
+    x_test_feat = expand_dataset_features(x_test_raw)
+    print(f"Trénovací matice po extrakci rysů: {x_train_feat.shape}")
 
     model = RandomForestClassifier(n_estimators=150, random_state=42, n_jobs=-1)
-    model.fit(x_train_aug, y_train_aug)
+    model.fit(x_train_feat, y_train_aug)
 
-    accuracy = model.score(x_test, y_test)
-    print(f"Přesnost modelu na reálných testovacích datech: {accuracy * 100:.2f} %")
+    y_pred = model.predict(x_test_feat)
+    accuracy = model.score(x_test_feat, y_test)
+    print(f"\nPřesnost modelu na testovacích datech: {accuracy * 100:.2f} %\n")
+
+    present_labels = sorted(np.unique(y_test))
+    target_names = [GESTURE_MAP.get(lbl, str(lbl)) for lbl in present_labels]
+
+    print("=== CLASSIFICATION REPORT ===")
+    print(classification_report(y_test, y_pred, labels=present_labels, target_names=target_names, zero_division=0))
+
+    print("=== MATICE ZÁMĚN (CONFUSION MATRIX) ===")
+    cm = confusion_matrix(y_test, y_pred, labels=present_labels)
+    header = "Skutečnost \\ Predikce | " + " | ".join(f"{name[:6]:>6}" for name in target_names)
+    print(header)
+    print("-" * len(header))
+    for name, row in zip(target_names, cm):
+        print(f"{name:<21} | " + " | ".join(f"{val:>6}" for val in row))
+
     return model
 
 def save_model(model: RandomForestClassifier, filepath: str) -> None:

@@ -25,6 +25,16 @@ PALM_SIZE_MIN = 0.08
 PALM_SIZE_MAX = 0.28
 TURN_DEADZONE = 0.12
 
+# --- OBOUSMĚRNÁ TELEMETRIE Z ESP32 ---
+TELEMETRY_PORT = 5006          # Port na PC, kam ESP32 posílá data ze senzorů
+TELEMETRY_TIMEOUT = 1.5        # Po kolika s bez dat označíme telemetrii jako offline
+OBSTACLE_STOP_CM = 15.0        # Kritická vzdálenost HC-SR04 (blokuje pohyb vpřed)
+FALL_ANGLE_DEG = 42.0          # Kritický náklon Pitch/Roll z MPU6050 (pád robota)
+FORWARD_GESTURES = {"OPEN_PALM", "POINTING"}  # Gesta pro chůzi vpřed
+
+# --- DETEKCE NEZNÁMÝCH GEST (OOD ENTROPIE) ---
+MAX_PREDICTION_ENTROPY = 0.85  # Maximální povolená Shannonova entropie rozdělení
+
 GESTURE_MAP = {
     0: "IDLE",
     1: "FIST",
