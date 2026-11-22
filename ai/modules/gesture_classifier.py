@@ -11,8 +11,13 @@ from config import (
     MIN_GESTURE_CONFIDENCE,
 )
 
+#Třída obsahuje natrénovaný model strojového učení
+#a zajišťuje, aby jeh predikce v reálném čase
+#neblikaly a aby robot neprovedl chybný příkaz
+#při neznámem nebo nejasném pohybu ruky
 
 class GestureClassifier:
+    #Oveří existenci souboru s natrénovaným modelem, načtení do paměti
     def __init__(
         self,
         model_path: str,
@@ -32,11 +37,15 @@ class GestureClassifier:
         self.max_entropy = max_entropy
         self.last_confirmed_label: int | None = None
 
+#Vymaže celou historii posledních snímků, zapomene
+#poslední porvrzené gesto, když zmiží ruka nebo UNARMED
     def reset(self) -> None:
         """Okamžitě vymaže historii a vrátí stav na bezpečný klid (STOP)."""
         self.history.clear()
         self.last_confirmed_label = None
 
+#Provede syrovou predikci nad jedním 78prvkovým
+#vektorem příznaků z aktulního snímku
     def predict(self, vector: np.ndarray | None) -> tuple[int | None, float, float]:
         if vector is None or len(vector) != 78:
             return None, 0.0, 99.0
@@ -53,6 +62,8 @@ class GestureClassifier:
 
         return prediction, confidence, entropy
 
+#Filtry nejistoty a většinouvé hlasování v čase
+#Vrátí čislo gesta, jistotu, název gesta pro robota, stavový kod
     def predict_smoothed(
         self, vector: np.ndarray | None
     ) -> tuple[int | None, float, str, str]:

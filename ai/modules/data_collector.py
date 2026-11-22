@@ -42,15 +42,16 @@ class DatasetWriter:
                 writer.writerow(header)
 
     # validuje, že vektor není none, před tím, než se pokusí zapisovat na disk
-    # a že obsahuje 63 prvků (21 kloubů x 3 souřadnice)
+    # a že obsahuje 78 prvků (21 kloubů x 3 souřadnice)
     # Převádí NumPy pole na Python list
     # na konec csv zapíše nové řádky
     # Potvrdí uložení
     def save_sample(self, label: int, vector: np.ndarray | None) -> bool:
-        if vector is None or len(vector) != 63:
+        if vector is None or len(vector) < 63:
             return False
 
-        row = [label] + vector.tolist()
+        raw_63 = vector[:63]
+        row = [label] + raw_63.tolist()
 
         with open(self.filepath, mode="a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)

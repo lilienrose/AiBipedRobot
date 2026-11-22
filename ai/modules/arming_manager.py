@@ -2,7 +2,10 @@ import time
 import cv2
 import numpy as np
 
-
+#Třída, která slouží jako bezpečnostní pojistka
+#která zajistí, že robot nereaguje na náhodné pohyby
+#tím, že gesto PEACE po 1,5 s ho odemkne či zamkne
+#a po 5s se zamkne po době nečinnosti automaticky
 class ArmingManager:
     def __init__(
         self,
@@ -19,11 +22,13 @@ class ArmingManager:
         self.last_hand_seen_time: float = time.time()
         self.toggle_cooldown_until: float = 0.0
 
+#  Okamžite uzamčení bez odpočítávání
     def force_disarm(self) -> None:
         """Okamžité bezpečnostní uzamčení (např. při dvou rukách v záběru)."""
         self.is_armed = False
         self.arm_start_time = None
-
+# Volá se u každého nového snímku z kamery
+# Příjme rozpoznané gesto a zda ruka je v záběru
     def update(self, gesture: str | None, hand_present: bool) -> tuple[bool, float]:
         """
         Aktualizuje stav zámku.
@@ -63,6 +68,8 @@ class ArmingManager:
             self.arm_start_time = None
             return self.is_armed, 0.0
 
+#  Vykreslí do snímku z kamery vizuální indikátor stavu
+#  Abychom viděli co pojistka dělá, např je ARMED
     def draw_hud(self, frame: np.ndarray, progress: float) -> None:
         h, w, _ = frame.shape
         now = time.time()

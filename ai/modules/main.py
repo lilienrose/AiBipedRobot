@@ -22,7 +22,9 @@ from gesture_classifier import GestureClassifier
 from hand_tracker import HandTracker
 from robot_sender import RobotSender
 
-
+#Otevře kameru, vytvoří instanci všech pěti pomocných tříd
+#tracker, classifier, sender, telemetry, arming
+#Připraví pomocné proměnné active_hand (hlídá výmenu ruk) a progress
 def run_robot_control():
     cap = cv2.VideoCapture(0)
     tracker = HandTracker(max_hands=2, detection_conf=0.7)
