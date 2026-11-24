@@ -21,7 +21,7 @@ class RealisticBipedSimulator:
         self.arena_w = 740
 
         self.cmd = "STOP"
-        self.mode_label = "KLID (90 deg)"
+        self.mode_label = "KLID / STOP (90 deg)"
         self.hand = "-"
         self.speed = 0.0
         self.turn = 0.0
@@ -44,7 +44,7 @@ class RealisticBipedSimulator:
         self.phase = 0.0
         self.last_frame_time = time.time()
 
-    def update_from_payload(self, payload: dict) -> None:
+    def update_from_payload(self, payload: dict | str) -> None:
         if isinstance(payload, dict):
             self.cmd = str(payload.get("cmd", "STOP")).strip().upper()
             self.hand = str(payload.get("hand", "-"))
@@ -52,22 +52,45 @@ class RealisticBipedSimulator:
             self.turn = float(payload.get("turn", 0.0))
         else:
             self.cmd = str(payload).strip().upper()
+            if self.cmd in ("POINTING_LEFT", "TURN_LEFT"):
+                self.turn = -0.7
+            elif self.cmd in ("POINTING_RIGHT", "TURN_RIGHT"):
+                self.turn = 0.7
         self.last_packet_time = time.time()
 
-    def _classify_intent(self) -> tuple[str, str]:
-        if self.cmd in ("STOP", "IDLE", "FIST", "HOME", "DISARMED"):
-            return "STOP", "KLID / STOP (90 deg)"
-        if self.cmd in ("POINTING", "FORWARD"):
-            return "WALK", "CHUZE VPRED"
-        if self.cmd == "OPEN_PALM":
-            return "LEAN_LEFT", "NAKLON VLEVO"
+    def _classify_intent(self) -> tuple[str, float, str]:
+        if self.cmd in ("STOP", "IDLE", "HOME", "DISARMED"):
+            return "STOP", 0.0, "KLID / STOP (90 deg)"
+
         if self.cmd == "PEACE":
-            return "LEAN_RIGHT", "NAKLON VPRAVO"
+            return "STOP", 0.0, "ZAMKNUTO / PAUZA (90 deg)"
+
+        if self.cmd in ("OPEN_PALM", "FORWARD"):
+            return "WALK_FWD", 0.0, "PLYNULA CHUZE VPRED"
+
+        if self.cmd in ("FIST", "BACKWARD"):
+            return "WALK_BACK", 0.0, "COUVANI"
+
+        if self.cmd in ("POINTING_LEFT", "TURN_LEFT"):
+            return "TURN", -0.75, "ZATACENI VLEVO"
+
+        if self.cmd in ("POINTING_RIGHT", "TURN_RIGHT"):
+            return "TURN", 0.75, "ZATACENI VPRAVO"
+
+        if self.cmd == "POINTING":
+            if self.turn < -0.15:
+                return "TURN", self.turn, "ZATACENI VLEVO"
+            if self.turn > 0.15:
+                return "TURN", self.turn, "ZATACENI VPRAVO"
+            return "STOP", 0.0, "UKAZANI (STRED - CEKAM)"
+
         if self.cmd == "THUMBS_UP":
-            return "SQUAT", "PODREP"
+            return "SQUAT", 0.0, "PODREP (BALANCNI POZA)"
+
         if self.cmd == "THUMBS_DOWN":
-            return "TIPTOE", "VZPRIMENI (SPICKY)"
-        return "STOP", "KLID / STOP (90 deg)"
+            return "TIPTOE", 0.0, "VZPRIMENI NA SPICKY"
+
+        return "STOP", 0.0, "KLID / STOP (90 deg)"
 
     def step_physics(self) -> None:
         now = time.time()
@@ -75,12 +98,13 @@ class RealisticBipedSimulator:
         self.last_frame_time = now
 
         if now - self.last_packet_time > 0.5:
-            self.cmd = "STOP"
+            self.cmd = "IDLE"
             self.speed = 0.0
             self.turn = 0.0
 
-        mode, self.mode_label = self._classify_intent()
-        eff_speed = max(self.speed, 0.45) if mode == "WALK" else 0.0
+        mode, turn_dir, self.mode_label = self._classify_intent()
+        is_walking = mode in ("WALK_FWD", "WALK_BACK", "TURN")
+        eff_speed = max(self.speed, 0.5) if is_walking else 0.0
 
         targets = {
             "L_HIP": 90.0,
@@ -91,43 +115,46 @@ class RealisticBipedSimulator:
             "R_ARM": 90.0,
         }
 
-        if mode == "WALK":
-            step_freq = 4.5 + eff_speed * 6.5
+        if is_walking:
+            step_freq = 4.5 + eff_speed * 6.0
             self.phase = (self.phase + dt * step_freq) % (2.0 * math.pi)
             hip_wave = math.sin(self.phase)
             tilt_wave = math.cos(self.phase)
 
-            targets["L_HIP"] = 90.0 + hip_wave * 15.0
-            targets["R_HIP"] = 90.0 - hip_wave * 15.0
+            dir_sign = -1.0 if mode == "WALK_BACK" else 1.0
+            amp_l = 15.0 * dir_sign * (1.0 + turn_dir * 0.5)
+            amp_r = 15.0 * dir_sign * (1.0 - turn_dir * 0.5)
+
+            targets["L_HIP"] = 90.0 + hip_wave * amp_l
+            targets["R_HIP"] = 90.0 - hip_wave * amp_r
             targets["L_FOOT"] = 90.0 + tilt_wave * 15.0
             targets["R_FOOT"] = 90.0 + tilt_wave * 15.0
-            targets["L_ARM"] = 90.0 - hip_wave * 20.0
-            targets["R_ARM"] = 90.0 + hip_wave * 20.0
+            targets["L_ARM"] = 90.0 - hip_wave * (20.0 * dir_sign)
+            targets["R_ARM"] = 90.0 + hip_wave * (20.0 * dir_sign)
 
             step_pulse = 0.75 + 0.25 * abs(math.cos(self.phase))
-            forward_vel = (95.0 * eff_speed) * step_pulse
-            self.pos_x += math.cos(self.heading) * forward_vel * dt
-            self.pos_y += math.sin(self.heading) * forward_vel * dt
-
-        elif mode == "LEAN_LEFT":
-            # Odpovida POSE_LEAN_LEFT v C++: {105, 90, 105, 90, 90, 90}
-            targets["L_HIP"] = 105.0
-            targets["L_FOOT"] = 105.0
-
-        elif mode == "LEAN_RIGHT":
-            # Odpovida POSE_LEAN_RIGHT v C++: {90, 90, 90, 75, 90, 75}
-            targets["R_HIP"] = 75.0
-            targets["R_FOOT"] = 75.0
+            if mode == "WALK_FWD":
+                forward_vel = (95.0 * eff_speed) * step_pulse
+                self.pos_x += math.cos(self.heading) * forward_vel * dt
+                self.pos_y += math.sin(self.heading) * forward_vel * dt
+            elif mode == "WALK_BACK":
+                backward_vel = -(75.0 * eff_speed) * step_pulse
+                self.pos_x += math.cos(self.heading) * backward_vel * dt
+                self.pos_y += math.sin(self.heading) * backward_vel * dt
+            else:
+                angular_vel = turn_dir * 1.9 * step_pulse
+                forward_vel = 35.0 * step_pulse
+                self.heading += angular_vel * dt
+                self.pos_x += math.cos(self.heading) * forward_vel * dt
+                self.pos_y += math.sin(self.heading) * forward_vel * dt
 
         elif mode == "SQUAT":
-            # Odpovida POSE_SQUAT v C++: {90, 110, 70, 90, 110, 70}
             targets["L_FOOT"] = 70.0
             targets["R_FOOT"] = 70.0
             targets["L_ARM"] = 110.0
             targets["R_ARM"] = 110.0
 
         elif mode == "TIPTOE":
-            # Odpovida POSE_TIPTOE v C++: {90, 75, 105, 90, 75, 105}
             targets["L_FOOT"] = 105.0
             targets["R_FOOT"] = 105.0
             targets["L_ARM"] = 75.0
@@ -145,7 +172,6 @@ class RealisticBipedSimulator:
             self.trail.append(pt)
             if len(self.trail) > 300:
                 self.trail.pop(0)
-
     def _rot_offset(self, forward: float, right: float) -> tuple[int, int]:
         fx, fy = math.cos(self.heading), math.sin(self.heading)
         rx, ry = -fy, fx
@@ -171,49 +197,61 @@ class RealisticBipedSimulator:
         l_foot_deg = self.servos["L_FOOT"] - 90.0
         r_foot_deg = self.servos["R_FOOT"] - 90.0
 
-        # Výpočet náklonu těla i zdvihu chodidel podle reálných úhlů kotníků
         tilt_deg = (l_foot_deg + r_foot_deg) * 0.5
         l_lift = max(0.0, -l_foot_deg) * 0.45
         r_lift = max(0.0, r_foot_deg) * 0.45
         body_sway = -tilt_deg * 0.35
 
-        # Změna velikosti trupu při podřepu (SQUAT) / vzpřímení (TIPTOE)
-        squat_offset = (self.servos["L_ARM"] - 90.0) * 0.25
+        # Kladná hodnota = podřep (SQUAT), záporná = vzpřímení na špičky (TIPTOE)
+        # Vychází z L_ARM/R_ARM: 110° -> +20 (podřep), 75° -> -15 (špičky)
+        vertical_pose = self.servos["L_ARM"] - 90.0 if self.servos["L_ARM"] == self.servos["R_ARM"] else 0.0
+        squat_offset = vertical_pose * 0.45
+        stance_spread = max(-4.0, vertical_pose * 0.25)  # Rozkročení v podřepu, zúžení na špičkách
 
-        cv2.circle(canvas, self._rot_offset(0, body_sway), 34, (16, 18, 22), -1)
+        # Stín pod robotem (větší v podřepu, menší při vzpřímení)
+        shadow_radius = int(max(24, min(42, 34 + vertical_pose * 0.3)))
+        cv2.circle(canvas, self._rot_offset(0, body_sway), shadow_radius, (16, 18, 22), -1)
 
+        # Chodidla
         for side_sign, hip_deg, lift in ((-1, l_hip_deg, l_lift), (1, r_hip_deg, r_lift)):
             stride_px = hip_deg * 0.85
-            foot_center = self._rot_offset(stride_px, side_sign * 17.0 + body_sway)
+            foot_lat = side_sign * (17.0 + stance_spread) + body_sway
+            foot_center = self._rot_offset(stride_px, foot_lat)
             foot_ang = self.heading + math.radians(hip_deg * 0.35)
             fx, fy = math.cos(foot_ang), math.sin(foot_ang)
-            p_back = (int(foot_center[0] - fx * 12), int(foot_center[1] - fy * 12))
+
+            # Při vzpřímení na špičkách (vertical_pose < -5) se chodidlo zkrátí (opora jen o špičku)
+            foot_len_back = 6 if vertical_pose < -5 else 12
+            p_back = (int(foot_center[0] - fx * foot_len_back), int(foot_center[1] - fy * foot_len_back))
             p_front = (int(foot_center[0] + fx * 15), int(foot_center[1] + fy * 15))
 
-            is_grounded = lift < 2.0
-            color = (0, 235, 160) if is_grounded else (120, 130, 145)
+            is_grounded = lift < 2.0 and vertical_pose >= -5
+            color = (0, 235, 160) if is_grounded else ((255, 180, 60) if vertical_pose < -5 else (120, 130, 145))
             cv2.line(canvas, p_back, p_front, color, int(13 + lift * 0.3), cv2.LINE_AA)
             cv2.circle(canvas, foot_center, 4, (30, 30, 35), -1)
 
+        # Ruce (v podřepu vyvažují dopředu, na špičkách se roztáhnou do stran)
         for side_sign, servo_key in ((-1, "L_ARM"), (1, "R_ARM")):
             arm_deg = self.servos[servo_key] - 90.0
-            arm_fwd = arm_deg * 0.75
-            arm_out = 30.0 + max(0.0, arm_deg - 20.0) * 0.25
+            arm_fwd = arm_deg * 0.95
+            arm_out = 30.0 + abs(arm_deg) * 0.35
             shoulder = self._rot_offset(0, side_sign * 24 + body_sway)
             hand = self._rot_offset(arm_fwd, side_sign * arm_out + body_sway)
             cv2.line(canvas, shoulder, hand, (55, 58, 66), 8, cv2.LINE_AA)
             cv2.circle(canvas, hand, 7, (230, 210, 40), -1)
 
+        # Trup a hlava (výška se výrazně mění mezi podřepem a špičkami)
         torso_base = self._rot_offset(0, body_sway)
         torso_top = (torso_base[0], int(torso_base[1] - 26 + squat_offset))
         cv2.circle(canvas, torso_base, 24, (42, 44, 52), -1)
         cv2.circle(canvas, torso_top, 23, (58, 62, 72), -1)
         cv2.circle(canvas, torso_top, 23, (220, 200, 50), 2)
 
-        head_center = (torso_top[0], torso_top[1] - 18)
+        head_center = (torso_top[0], int(torso_top[1] - 18 + squat_offset * 0.3))
         cv2.circle(canvas, head_center, 18, (45, 48, 56), -1)
         cv2.circle(canvas, head_center, 18, (220, 200, 50), 2)
 
+        # Oči ultrazvuku HC-SR04
         fx, fy = math.cos(self.heading), math.sin(self.heading)
         rx, ry = -fy, fx
         for eye_side in (-7, 7):
@@ -222,6 +260,7 @@ class RealisticBipedSimulator:
             cv2.circle(canvas, (ex, ey), 4, (240, 240, 240), -1)
             cv2.circle(canvas, (ex, ey), 2, (20, 20, 25), -1)
 
+        # Směrová šipka
         cv2.arrowedLine(
             canvas, self._rot_offset(28, 0), self._rot_offset(52, 0), (0, 255, 140), 2, tipLength=0.35
         )
@@ -276,7 +315,7 @@ class RealisticBipedSimulator:
         cv2.rectangle(canvas, (15, 12), (self.arena_w - 15, 80), (18, 20, 26), -1)
         cv2.rectangle(canvas, (15, 12), (self.arena_w - 15, 80), (90, 95, 110), 1)
 
-        cmd_color = (0, 120, 255) if self.mode_label.startswith("KLID") else (0, 255, 120)
+        cmd_color = (0, 120, 255) if self.mode_label.startswith(("KLID", "ZAMKNUTO")) else (0, 255, 120)
         cv2.putText(
             canvas,
             f"GESTO: {self.cmd}  ->  {self.mode_label}",
